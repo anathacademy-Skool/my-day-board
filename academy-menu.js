@@ -9,6 +9,7 @@ $('nt').textContent=M.note||('Hey '+(M.name||'there')+', remember: run one thing
 const bx=(id,on,b,t,say)=>{const d=$(id);if(!on){d.remove();return}d.style.display='flex';const s=d.lastChild;s.append(E('b','',b),document.createTextNode(' · '+t));s.firstChild.style.fontWeight='500';d.addEventListener('click',()=>sendPrompt(say))};
 bx('d',M.myday,'My day',"your emails, calendar and today's plan in one look. Tap here, or type my day.",'my day');
 bx('k',M.numbers,'My numbers',M.numbers||'','my numbers');
+if(M.numbers&&M.color&&M.color!=='green'){const P={blue:'accent',amber:'warning',red:'danger',purple:'info',pink:'danger',orange:'warning'}[M.color];const k=$('k');if(P&&k){k.style.background='var(--bg-'+P+')';k.style.color='var(--text-'+P+')';k.style.borderColor='var(--border-'+P+')'}}
 $('hd').textContent=M.heading||'What are we doing today?';
 (M.buttons||[]).forEach(([i,t,r,x,say])=>{const b=document.createElement('button');b.type='button';b.className=r==1?'b r':r==2?'b t':'b';b.innerHTML='<i class="ti ti-'+i+'"></i>';b.append(t);if(x&&x.length){const e=E('div','e');x.forEach(s=>e.append(E('div','','· '+s)));b.append(e)}let h;b.addEventListener('click',()=>{if(b.dataset.s)return;b.dataset.s=1;sendPrompt(say||t);b.classList.add('s');const k=t.match(/^(\d)\./);if(!h){h=E('div','h','✓ Sent. Nothing happening? '+(k?'Type '+k[1]:r==1?'Type fix':'Just type it')+'.');b.after(h)}setTimeout(()=>{delete b.dataset.s;b.classList.remove('s');if(h){h.remove();h=null}},3000)});$('l').append(b)});
 if(M.foot)$('ft').textContent=M.foot;else $('ft').remove();
