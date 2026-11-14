@@ -52,7 +52,7 @@ const readJson = async ($: any, path: string): Promise<any> => {
   }
 }
 
-export type Earned = { menu: boolean; email: boolean; myday: boolean; todo: boolean; ads: boolean }
+export type Earned = { menu: boolean; email: boolean; myday: boolean; todo: boolean; ads: boolean; checkin: boolean }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const earned = async ($: any): Promise<Earned> => {
@@ -65,6 +65,7 @@ const earned = async ($: any): Promise<Earned> => {
     myday: on('myday'),
     todo: extra.todo === true || (await $.fs.exists(SETUP_FILE).catch(() => false)),
     ads: extra.ads === true,
+    checkin: extra.checkin === true || lessonDone(progress, '4.6'),
   }
 }
 
@@ -460,6 +461,52 @@ const readClean = async ($: any): Promise<string | undefined> => {
 
   return clean
 }
+
+// ☀️ The day bar and 🔔 the check-in bar (added 2026-11-15). They show above the buttons, by themselves:
+// the day bar once My day (4.6c) is done, the check-in bar once the check-in (4.6) is done. Nothing runs by itself.
+const DAYBAR_FILE = '.anath/day-bar.json'
+const CHECKIN_FILE = '.anath/check-in.json'
+const SETUP_DAY = 'Business/my-day-setup.md'
+const WEEKDAY_NAMES = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat']
+
+// The bar's day starts at 4am, the same as the to-do board.
+export const barDay = (now: number): string => {
+  const d = new Date(now)
+  if (d.getHours() < 4) d.setDate(d.getDate() - 1)
+  return dayKey(d.getTime())
+}
+export const barWeekday = (now: number): number => {
+  const d = new Date(now)
+  if (d.getHours() < 4) d.setDate(d.getDate() - 1)
+  return d.getDay()
+}
+
+// Their work days from "Days off: Saturday, Sunday" in my-day-setup.md (saved in 4.6c). Not set: Monday to Friday.
+export const workFromSetup = (text: string): number[] | null => {
+  const m = /Days off:\s*([^·*\n]*)/i.exec(text)
+  if (!m || /not set/i.test(m[1])) return null
+  const off = WEEKDAY_NAMES.map((n, i) => (new RegExp('\\b' + n, 'i').test(m[1]) ? i : -1)).filter(i => i >= 0)
+  if (/none|no days/i.test(m[1])) return [0, 1, 2, 3, 4, 5, 6]
+  return off.length ? [0, 1, 2, 3, 4, 5, 6].filter(i => !off.includes(i)) : null
+}
+
+// "Last checked: 2026-11-05" in their CLAUDE.md: the check-in sets it each time it runs.
+export const lastChecked = (text: string): string | undefined => /Last checked:\s*(\d{4}-\d{2}-\d{2})/.exec(text)?.[1]
+
+// Check-in due? With a check-in day saved: from that day and hour each week, until it's done.
+// No day saved yet: once it's 7 days since the last one.
+export const checkInDue = (last: string | undefined, now: number, day?: number, hour = 8): boolean => {
+  if (!last) return true
+  const [y, mo, dd] = last.split('-').map(Number)
+  const lastEnd = new Date(y, mo - 1, dd, 23, 59).getTime()
+  if (typeof day !== 'number' || day < 0 || day > 6) return now - lastEnd >= 6 * 86400000
+  const d = new Date(now)
+  d.setHours(hour, 0, 0, 0)
+  d.setDate(d.getDate() - ((d.getDay() - day + 7) % 7))
+  if (d.getTime() > now) d.setDate(d.getDate() - 7)
+  return lastEnd < d.getTime()
+}
+
 export const register: Register = on => {
   on('prompt.submit', async ($, e, next) => {
     if (e.origin?.kind === 'plugin' && e.origin.name === 'anath-strip') {
@@ -492,11 +539,27 @@ export const register: Register = on => {
     const above = await next(e).catch(() => null)
     if (!(await isStudentFolder($))) return above
     const has = await earned($)
-    if (!has.menu && !has.email && !has.myday && !has.todo && !has.ads) return above
+    if (!has.menu && !has.email && !has.myday && !has.todo && !has.ads && !has.checkin) return above
+
+    // 🔔 Check-in bar: their check-in day (or 7 days on), until the check-in runs.
+    let nowMs = Date.now()
+    try {
+      nowMs = await $.clock.now()
+    } catch {
+      // no clock: use the computer's
+    }
+    const ci = await readJson($, CHECKIN_FILE)
+    const rules = String(await $.fs.read('CLAUDE.md').catch(() => ''))
+    const showCheckIn = has.checkin && checkInDue(lastChecked(rules), nowMs, ci.day, typeof ci.hour === 'number' ? ci.hour : 8)
+    // ☀️ Day bar: each work day, until they press ✕. Never on a day off.
+    const today = barDay(nowMs)
+    const setupWork = workFromSetup(String(await $.fs.read(SETUP_DAY).catch(() => '')))
+    const workDays = (await $.fs.exists(DAYS_FILE).catch(() => false)) ? await loadWork($) : (setupWork ?? WORK_DEFAULT)
+    const showDay = has.myday && workDays.includes(barWeekday(nowMs)) && (await readJson($, DAYBAR_FILE)).done !== today
 
     const isBusy = (await read($, phase)) !== 'idle'
     const which = await read($, pressed)
-    const { Box, Button } = $.ui.resolve(e)
+    const { Box, Button, Text } = $.ui.resolve(e)
 
     // A second press while it's loading is ignored, so a job never runs twice.
     const send = (key: Pressed, text: string) => async () => {
@@ -531,9 +594,37 @@ export const register: Register = on => {
 
     const label = (key: Pressed, normal: string) => (isBusy && which === key ? '✓ On its way' : normal)
 
+    const hideDay = async () => {
+      const fresh = await readJson($, DAYBAR_FILE)
+      await $.fs.write(DAYBAR_FILE, JSON.stringify({ ...fresh, done: today }) + '\n').catch(() => undefined)
+      try {
+        $.ui.invalidate('ui.render')
+      } catch {
+        $.ui.toast('Hidden till tomorrow.')
+      }
+    }
+
     return (
       <Box flexDirection="column" gap={1}>
         {above}
+        {showCheckIn ? (
+          <Box flexDirection="row" gap={1} alignItems="center" borderStyle="round" borderColor="red" paddingX={1}>
+            <Box flexDirection="column" flexGrow={1}>
+              <Text bold color="red">🔔 Time for your check-in</Text>
+              <Text color="red">5 minutes. Keeps your prices right and your business up to date.</Text>
+            </Box>
+            <Button key="checkin-now" label={label('checkin', 'Do it now')} onPress={send('checkin', 'check-in')} />
+          </Box>
+        ) : null}
+        {showDay ? (
+          <Box flexDirection="row" gap={1} alignItems="flex-start" borderStyle="round" borderColor="green" paddingX={1}>
+            <Box flexDirection="column" flexGrow={1}>
+              <Text>☀️ What's your best day looking like today? Let's go get it.</Text>
+              <Text dimColor>Press ☀️ My day, or just speak it, and I'll add it to your to-do list.</Text>
+            </Box>
+            <Button key="day-close" label="✕" onPress={hideDay} />
+          </Box>
+        ) : null}
         <Box flexDirection="row" gap={1}>
           {has.menu ? <Button key="menu" label={label('menu', '☰ Menu')} onPress={send('menu', 'menu')} /> : null}
           {has.myday ? <Button key="myday" label={label('myday', '☀️ My day')} onPress={send('myday', 'my day')} /> : null}

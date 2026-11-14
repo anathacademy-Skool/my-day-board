@@ -1,5 +1,5 @@
 export type Phase = 'idle' | 'sent' | 'running'
-export type Pressed = 'none' | 'menu' | 'myday' | 'email' | 'ads'
+export type Pressed = 'none' | 'menu' | 'myday' | 'email' | 'ads' | 'checkin'
 export type DoneItem = { text: string; date: string }
 export type Grown = { name: string; colour: number; date: string }
 export type Dog = { name: string; colour: number; stage: number; biscuits: number; stageStart: number; total: number; fedAt: number; streak: number; lastDay: string; days: string[]; fed?: string[]; wall: Grown[] }
