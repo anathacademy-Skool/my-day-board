@@ -1,0 +1,1 @@
+{"name":"usage-watchdog","version":"0.1.0","description":"Shows how much of your Claude limit is used, warns at 70% and 90%, and pauses big jobs from 90% unless you say \"go anyway\".","types":"./types/index.d.ts","author":{"name":"Anath AI"}}
