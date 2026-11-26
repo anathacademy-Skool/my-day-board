@@ -1,1 +1,10 @@
-{"name":"anath-strip","version":"0.1.0","description":"The Anath AI Academy buttons above the typing box: Menu, Email, My day, To-do and Winning ads, each one showing once that lesson is done.","types":"./types/index.d.ts","author":{"name":"Anath AI"},"license":"LicenseRef-Anath-AI"}
+{
+  "name": "anath-strip",
+  "version": "0.2.0",
+  "description": "The Anath AI buttons above the typing box: Menu, My day, To-do, Email and Winning ads, and on a second line What's new, Memories and Planner, plus the morning day bar and the check-in bar. In a student's My brain each one shows once its lesson is done; in a client's folder they're all on. Taps on your pages beside the chat go straight into the chat.",
+  "types": "./types/index.d.ts",
+  "author": {
+    "name": "Anath AI"
+  },
+  "license": "LicenseRef-Anath-AI"
+}
