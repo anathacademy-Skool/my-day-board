@@ -1,6 +1,6 @@
 import { test, expect } from 'claude-code/testing'
 
-import { lessonDone, workFromSetup, lastChecked, checkInDue, barDay } from './register'
+import { lessonDone, workFromSetup, lastChecked, checkInDue, barDay, jsonOf, PAGE_LINES } from './register'
 
 const PROGRESS = (rows: string[]) => `# Progress\n\n| Lesson | Name | Needs | Test | Done |\n|---|---|---|---|---|\n${rows.join('\n')}\n`
 const ROW = (n: string, done: boolean) => `| ${n} | x | y | z | ${done ? '2026-11-13' : ''} |`
@@ -159,4 +159,126 @@ test('check-in bar: no day saved = 7 days on', () => {
   expect(checkInDue('2026-11-05', now)).toBe(true)
   expect(checkInDue('2026-11-14', now)).toBe(false)
   expect(checkInDue(undefined, now)).toBe(true)
+})
+
+// ── v0.2.0 (2026-11-26): the second line, client folders, page taps ──
+const CLIENT = '{"client":true,"menu":"L","todo":"My to-do.md","daySetup":"Behind the scenes/my-day-setup.md"}'
+
+for (const surface of ['terminal', 'desktop'] as const) {
+  test(`a client's folder: every button on day one, Winning ads waits for the coach (${surface})`, async ($, on) => {
+    folder(on, { '.anath/strip.json': CLIENT })
+    const ui = await $.ui.mount({ ...STRIP, surface })
+    for (const b of [/Menu/, /My day/, /To-do/, /Email/, /What's new/, /Memories/, /Planner/]) expect(await ui.find({ text: b })).toBeDefined()
+    expect(await ui.find({ text: /Winning ads/ })).toBeUndefined()
+    await ui.unmount()
+  })
+
+  test(`a client's Menu sends their menu word (${surface})`, async ($, on) => {
+    folder(on, { '.anath/strip.json': CLIENT })
+    const sent: string[] = []
+    on('prompt.submit', async (_$: unknown, e: { text: string; origin?: unknown }) => {
+      sent.push(e.text)
+      return { text: e.text, origin: e.origin }
+    })
+    const ui = await $.ui.mount({ ...STRIP, surface })
+    await ui.press({ key: 'menu' })
+    expect(sent).toEqual(['L'])
+    await ui.unmount()
+  })
+
+  test(`a client can switch one off (${surface})`, async ($, on) => {
+    folder(on, { '.anath/strip.json': '{"client":true,"buttons":{"memories":false}}' })
+    const ui = await $.ui.mount({ ...STRIP, surface })
+    expect(await ui.find({ text: /Memories/ })).toBeUndefined()
+    expect(await ui.find({ text: /Planner/ })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test(`strip.json without "client" draws nothing outside a student folder (${surface})`, async ($, on) => {
+    folder(on, { '.anath/strip.json': '{"buttons":{"ads":true}}' })
+    const ui = await $.ui.mount({ ...STRIP, surface })
+    expect(await ui.find({ text: /Menu|Winning ads/ })).toBeUndefined()
+    await ui.unmount()
+  })
+
+  test(`a student: no second line until a helper is in (${surface})`, async ($, on) => {
+    folder(on, { 'START HERE.md': 'x', 'Progress.md': PROGRESS([ROW('4.1', true)]) })
+    const ui = await $.ui.mount({ ...STRIP, surface })
+    expect(await ui.find({ text: /What's new|Memories|Planner/ })).toBeUndefined()
+    await ui.unmount()
+  })
+
+  test(`a student: What's new after 4.2, Memories after the bonus, Planner once it's connected (${surface})`, async ($, on) => {
+    folder(on, {
+      'START HERE.md': 'x',
+      'Progress.md': PROGRESS([ROW('4.1', true)]),
+      '.claude/skills/whats-new/SKILL.md': 'x',
+      '.claude/skills/memories/SKILL.md': 'x',
+      '.claude/skills/planner/SKILL.md': 'x',
+    })
+    const ui = await $.ui.mount({ ...STRIP, surface })
+    expect(await ui.find({ text: /What's new/ })).toBeDefined()
+    expect(await ui.find({ text: /Memories/ })).toBeDefined()
+    expect(await ui.find({ text: /Planner/ })).toBeUndefined() // installed, not connected yet
+    await ui.unmount()
+  })
+
+  test(`a student: Planner shows once settings.json is saved, and sends "open my planner" (${surface})`, async ($, on) => {
+    folder(on, { 'START HERE.md': 'x', 'Progress.md': PROGRESS([ROW('4.1', true)]), '.claude/skills/planner/settings.json': '{}' })
+    const sent: string[] = []
+    on('prompt.submit', async (_$: unknown, e: { text: string; origin?: unknown }) => {
+      sent.push(e.text)
+      return { text: e.text, origin: e.origin }
+    })
+    const ui = await $.ui.mount({ ...STRIP, surface })
+    await ui.press({ key: 'planner' })
+    expect(sent).toEqual(['open my planner'])
+    await ui.unmount()
+  })
+
+  test(`a student's Menu still sends "menu" after a client folder (${surface})`, async ($, on) => {
+    folder(on, { 'START HERE.md': 'x', 'Progress.md': PROGRESS([ROW('4.1', true)]) })
+    const sent: string[] = []
+    on('prompt.submit', async (_$: unknown, e: { text: string; origin?: unknown }) => {
+      sent.push(e.text)
+      return { text: e.text, origin: e.origin }
+    })
+    const ui = await $.ui.mount({ ...STRIP, surface })
+    await ui.press({ key: 'menu' })
+    expect(sent).toEqual(['menu'])
+    await ui.unmount()
+  })
+
+  const MON9b = new Date(2026, 10, 16, 9, 0).getTime()
+  test(`a client: no check-in bar before their first check-in, then it comes when due (${surface})`, async ($, on) => {
+    on('clock.now', () => ({ value: MON9b }))
+    folder(on, { '.anath/strip.json': CLIENT, 'CLAUDE.md': '**Check-in streak:** 0 (last check-in: never)' })
+    const ui = await $.ui.mount({ ...STRIP, surface })
+    expect(await ui.find({ text: /Time for your check-in/ })).toBeUndefined()
+    await ui.unmount()
+  })
+
+  test(`a client: check-in bar once a week has passed (${surface})`, async ($, on) => {
+    on('clock.now', () => ({ value: MON9b }))
+    folder(on, { '.anath/strip.json': CLIENT, 'CLAUDE.md': '**Check-in streak:** 3 (last check-in: 2026-11-05)' })
+    const ui = await $.ui.mount({ ...STRIP, surface })
+    expect(await ui.find({ text: /Time for your check-in/ })).toBeDefined()
+    await ui.unmount()
+  })
+}
+
+test("client CLAUDE.md: reads the last check-in date", () => {
+  expect(lastChecked('**Check-in streak:** 2 (last check-in: 2026-11-20)')).toBe('2026-11-20')
+  expect(lastChecked('**Check-in streak:** 0 (last check-in: never)')).toBe(undefined)
+  expect(lastChecked('**What I sell last checked:** 2026-11-01')).toBe(undefined)
+})
+
+test("client day setup: rest days from the My rest days section", () => {
+  expect(workFromSetup('## My rest days\nSaturday, Sunday\n\n## Next')).toEqual([1, 2, 3, 4, 5])
+  expect(workFromSetup('## My rest days\nNot set yet *(asked once)*\n')).toBe(null)
+})
+
+test('page taps: only the four kinds of line, JSON read past the hint', () => {
+  expect(PAGE_LINES).toEqual(['My picks: ', 'My post: ', 'My planner: ', "What's new: "])
+  expect(jsonOf('{"browserOpen": true, "tabs": [{"origin": "http://localhost:8766"}]}\nThe pane {is} hidden.').tabs.length).toBe(1)
 })

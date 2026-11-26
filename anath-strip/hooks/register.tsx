@@ -3,14 +3,18 @@ import type { Register } from 'claude-code'
 
 import type { Board, Dog, Phase, Pressed } from '../types'
 
-// Anath AI Academy buttons, above the typing box. One install (lesson 4.1), then each button shows once its
-// lesson is done. Only inside a student's My brain folder (it has START HERE.md and Progress.md): anywhere else,
-// this mod draws nothing. All files are read from the folder Claude is open in; nothing personal lives in this mod.
+// Anath AI buttons, above the typing box. One install, then:
+// · In a student's My brain (it has START HERE.md and Progress.md) each button shows once its lesson is done.
+// · In a client's folder (.anath/strip.json says "client": true) they're all on from day one.
+// Anywhere else, this mod draws nothing. All files are read from the folder Claude is open in; nothing personal lives
+// in this mod. v0.2.0 (2026-11-26): a second line, ✨ What's new · 🎞️ Memories · 📅 Planner, the client folders, and
+// taps on their pages beside the chat going straight into the chat.
 
 const phase = atom({ plugin: 'anath-strip', key: 'phase' } as const, 'idle' as Phase)
 const pressed = atom({ plugin: 'anath-strip', key: 'pressed' } as const, 'none' as Pressed)
 
-const TODO_FILE = 'Business/My to-do.md'
+// Where the to-do list lives. A client's folder can say otherwise in .anath/strip.json ("todo": "My to-do.md").
+let TODO_FILE = 'Business/My to-do.md'
 const SETUP_FILE = '.anath/todo.json'
 const STRIP_FILE = '.anath/strip.json'
 const OWN_SOUND = '.anath/my-sound.wav'
@@ -52,20 +56,60 @@ const readJson = async ($: any, path: string): Promise<any> => {
   }
 }
 
-export type Earned = { menu: boolean; email: boolean; myday: boolean; todo: boolean; ads: boolean; checkin: boolean }
+export type Mode = 'student' | 'client' | null
+
+// Which kind of folder this is, and (for a client) where their files are and what the Menu button says.
+let MENU_WORD = 'menu'
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const stripMode = async ($: any): Promise<Mode> => {
+  TODO_FILE = 'Business/My to-do.md'
+  SETUP_DAY = 'Business/my-day-setup.md'
+  MENU_WORD = 'menu'
+  if (await isStudentFolder($)) return 'student'
+  const s = await readJson($, STRIP_FILE)
+  if (s.client !== true) return null
+  if (typeof s.todo === 'string' && s.todo.trim()) TODO_FILE = s.todo.trim()
+  if (typeof s.daySetup === 'string' && s.daySetup.trim()) SETUP_DAY = s.daySetup.trim()
+  if (typeof s.menu === 'string' && s.menu.trim()) MENU_WORD = s.menu.trim()
+  return 'client'
+}
+
+export type Earned = {
+  menu: boolean; email: boolean; myday: boolean; todo: boolean; ads: boolean; checkin: boolean
+  whatsnew: boolean; memories: boolean; planner: boolean
+}
+
+// The second line's buttons show once their helper is in (whichever lesson put it there):
+// ✨ What's new (4.2) · 🎞️ Memories (5.1c, a bonus) · 📅 Planner (4.6e, once Metricool is really connected).
+const WHATS_NEW = '.claude/skills/whats-new/SKILL.md'
+const MEMORIES = '.claude/skills/memories/SKILL.md'
+const PLANNER_SET = '.claude/skills/planner/settings.json'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const earned = async ($: any): Promise<Earned> => {
-  const progress = String(await $.fs.read('Progress.md').catch(() => ''))
+const earned = async ($: any, mode: Mode = 'student'): Promise<Earned> => {
   const extra = (await readJson($, STRIP_FILE)).buttons ?? {}
+  const has = async (path: string) => (await $.fs.exists(path).catch(() => false)) === true
+  if (mode === 'client') {
+    // A client gets them all on day one (a button for something not set up yet walks them through setting it up).
+    // 🏆 Winning ads comes with the ads coach. Any one can be switched off with "name": false.
+    const keep = (k: string) => extra[k] !== false
+    return {
+      menu: keep('menu'), email: keep('email'), myday: keep('myday'), todo: keep('todo'), ads: extra.ads === true,
+      checkin: keep('checkin'), whatsnew: keep('whatsnew'), memories: keep('memories'), planner: keep('planner'),
+    }
+  }
+  const progress = String(await $.fs.read('Progress.md').catch(() => ''))
   const on = (k: string) => extra[k] === true || (LESSON[k] ? lessonDone(progress, LESSON[k]) : false)
   return {
     menu: on('menu'),
     email: on('email'),
     myday: on('myday'),
-    todo: extra.todo === true || (await $.fs.exists(SETUP_FILE).catch(() => false)),
+    todo: extra.todo === true || (await has(SETUP_FILE)),
     ads: extra.ads === true,
     checkin: extra.checkin === true || lessonDone(progress, '4.6'),
+    whatsnew: extra.whatsnew === true || (await has(WHATS_NEW)),
+    memories: extra.memories === true || (await has(MEMORIES)),
+    planner: extra.planner === true || (await has(PLANNER_SET)),
   }
 }
 
@@ -466,7 +510,8 @@ const readClean = async ($: any): Promise<string | undefined> => {
 // the day bar once My day (4.6c) is done, the check-in bar once the check-in (4.6) is done. Nothing runs by itself.
 const DAYBAR_FILE = '.anath/day-bar.json'
 const CHECKIN_FILE = '.anath/check-in.json'
-const SETUP_DAY = 'Business/my-day-setup.md'
+// A client's folder can say otherwise in .anath/strip.json ("daySetup": "Behind the scenes/my-day-setup.md").
+let SETUP_DAY = 'Business/my-day-setup.md'
 const WEEKDAY_NAMES = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat']
 
 // The bar's day starts at 4am, the same as the to-do board.
@@ -481,17 +526,20 @@ export const barWeekday = (now: number): number => {
   return d.getDay()
 }
 
-// Their work days from "Days off: Saturday, Sunday" in my-day-setup.md (saved in 4.6c). Not set: Monday to Friday.
+// Their work days from "Days off: Saturday, Sunday" in my-day-setup.md (saved in 4.6c), or a client's "## My rest
+// days" section. Not set: Monday to Friday.
 export const workFromSetup = (text: string): number[] | null => {
-  const m = /Days off:\s*([^·*\n]*)/i.exec(text)
+  const m = /Days off:\s*([^·*\n]*)/i.exec(text) ?? /##\s*My rest days[^\n]*\n+([^#]*)/i.exec(text)
   if (!m || /not set/i.test(m[1])) return null
   const off = WEEKDAY_NAMES.map((n, i) => (new RegExp('\\b' + n, 'i').test(m[1]) ? i : -1)).filter(i => i >= 0)
   if (/none|no days/i.test(m[1])) return [0, 1, 2, 3, 4, 5, 6]
   return off.length ? [0, 1, 2, 3, 4, 5, 6].filter(i => !off.includes(i)) : null
 }
 
-// "Last checked: 2026-11-05" in their CLAUDE.md: the check-in sets it each time it runs.
-export const lastChecked = (text: string): string | undefined => /Last checked:\s*(\d{4}-\d{2}-\d{2})/.exec(text)?.[1]
+// "Last checked: 2026-11-05" in their CLAUDE.md: the check-in sets it each time it runs. A client's CLAUDE.md says
+// "(last check-in: 2026-11-05)" instead.
+export const lastChecked = (text: string): string | undefined =>
+  /Last checked:\s*(\d{4}-\d{2}-\d{2})/.exec(text)?.[1] ?? /last check-in:\s*(\d{4}-\d{2}-\d{2})/i.exec(text)?.[1]
 
 // Check-in due? With a check-in day saved: from that day and hour each week, until it's done.
 // No day saved yet: once it's 7 days since the last one.
@@ -507,7 +555,83 @@ export const checkInDue = (last: string | undefined, now: number, day?: number, 
   return lastEnd < d.getTime()
 }
 
+// 📨 Taps on their pages beside the chat (the editing page server, port 8766) go straight into the chat: What's new,
+// the planner hub, their variations. A page hands its line to the server; every 2 seconds this asks if one's waiting,
+// and if THIS chat's browser pane has those pages open, collects it (the server hands it to one chat only) and sends it
+// as their own words. Only these lines, nothing else. No server, no page open: it does nothing.
+const PAGES_SERVER = 'http://127.0.0.1:8766'
+const PAGES = /\/\/(?:localhost|127\.0\.0\.1):8766\b/
+export const PAGE_LINES = ['My picks: ', 'My post: ', 'My planner: ', "What's new: "]
+let polling = false
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const textOf = (r: any): string =>
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (Array.isArray(r?.content) ? r.content : []).map((b: any) => (b?.type === 'text' ? String(b.text ?? '') : '')).join('\n')
+
+// The browser's answer is JSON followed by a plain-words hint: take just the JSON.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export const jsonOf = (t: string): any => {
+  const a = t.indexOf('{')
+  let depth = 0
+  for (let i = a; i >= 0 && i < t.length; i++) {
+    if (t[i] === '{') depth++
+    else if (t[i] === '}' && --depth === 0) return JSON.parse(t.slice(a, i + 1))
+  }
+  return {}
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const pageHere = async ($: any): Promise<boolean> => {
+  try {
+    const r = await $.mcp.call('Claude_Browser', 'tabs_context', {})
+    if (r?.isError) return false
+    const d = jsonOf(textOf(r))
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return (Array.isArray(d.tabs) ? d.tabs : []).some((x: any) => PAGES.test(String(x?.origin ?? '')))
+  } catch {
+    return false
+  }
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const checkPages = async ($: any): Promise<void> => {
+  if (polling) return
+  polling = true
+  try {
+    const p = await $.http.fetch(`${PAGES_SERVER}/api/pending?t=${Date.now()}`)
+    if (!p?.ok) return
+    const id = String(JSON.parse(p.text || '{}').id ?? '')
+    if (!/^[a-f0-9]{12}$/.test(id)) return
+    if (!(await pageHere($))) return
+    const c = await $.http.fetch(`${PAGES_SERVER}/api/claim?id=${id}`, { method: 'POST' })
+    if (!c?.ok) return
+    const text = String(JSON.parse(c.text || '{}').text ?? '')
+    if (!PAGE_LINES.some(x => text.startsWith(x))) return
+    await $.prompt.submit({ text, asUser: true })
+  } catch {
+    // No page server, or the page isn't open here: nothing to do.
+  } finally {
+    polling = false
+  }
+}
+
 export const register: Register = on => {
+  on('session.start', async ($, e, next) => {
+    const result = await next(e)
+    try {
+      if (await stripMode($)) {
+        polling = false
+        $.clock.every(2_000, () => {
+          void checkPages($)
+        })
+      }
+    } catch {
+      // never stop the session starting
+    }
+    return result
+  })
+
   on('prompt.submit', async ($, e, next) => {
     if (e.origin?.kind === 'plugin' && e.origin.name === 'anath-strip') {
       await update($, phase, () => 'running').catch(() => undefined)
@@ -520,7 +644,7 @@ export const register: Register = on => {
       await update($, phase, () => 'idle')
       await update($, pressed, () => 'none')
     }
-    if (await isStudentFolder($)) {
+    if (await stripMode($)) {
       if (await $.fs.exists(SETUP_FILE).catch(() => false)) {
         const surprise = await syncFeed($).catch(() => '')
         if (surprise) $.ui.toast(surprise)
@@ -537,9 +661,10 @@ export const register: Register = on => {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e)
     const above = await next(e).catch(() => null)
-    if (!(await isStudentFolder($))) return above
-    const has = await earned($)
-    if (!has.menu && !has.email && !has.myday && !has.todo && !has.ads && !has.checkin) return above
+    const mode = await stripMode($)
+    if (!mode) return above
+    const has = await earned($, mode)
+    if (!Object.values(has).some(Boolean)) return above
 
     // 🔔 Check-in bar: their check-in day (or 7 days on), until the check-in runs.
     let nowMs = Date.now()
@@ -550,7 +675,10 @@ export const register: Register = on => {
     }
     const ci = await readJson($, CHECKIN_FILE)
     const rules = String(await $.fs.read('CLAUDE.md').catch(() => ''))
-    const showCheckIn = has.checkin && checkInDue(lastChecked(rules), nowMs, ci.day, typeof ci.hour === 'number' ? ci.hour : 8)
+    const last = lastChecked(rules)
+    // A client's first check-in date comes after onboarding: no date yet = no bar (their phone reminder covers it).
+    const showCheckIn = has.checkin && (mode === 'student' || last !== undefined) &&
+      checkInDue(last, nowMs, ci.day, typeof ci.hour === 'number' ? ci.hour : 8)
     // ☀️ Day bar: each work day, until they press ✕. Never on a day off.
     const today = barDay(nowMs)
     const setupWork = workFromSetup(String(await $.fs.read(SETUP_DAY).catch(() => '')))
@@ -626,17 +754,25 @@ export const register: Register = on => {
           </Box>
         ) : null}
         <Box flexDirection="row" gap={1}>
-          {has.menu ? <Button key="menu" label={label('menu', '☰ Menu')} onPress={send('menu', 'menu')} /> : null}
+          {has.menu ? <Button key="menu" label={label('menu', '☰ Menu')} onPress={send('menu', MENU_WORD)} /> : null}
           {has.myday ? <Button key="myday" label={label('myday', '☀️ My day')} onPress={send('myday', 'my day')} /> : null}
           {has.todo ? <Button key="todo" label="🎯 To-do" onPress={toggleTodo} /> : null}
           {has.email ? <Button key="email" label={label('email', '📧 Email')} onPress={send('email', 'check my email')} /> : null}
           {has.ads ? <Button key="ads" label={label('ads', '🏆 Winning ads')} onPress={send('ads', 'open my winning ads board')} /> : null}
         </Box>
+        {has.whatsnew || has.memories || has.planner ? (
+          <Box flexDirection="row" gap={1}>
+            {has.whatsnew ? <Button key="whatsnew" label={label('whatsnew', "✨ What's new")} onPress={send('whatsnew', "what's new")} /> : null}
+            {has.memories ? <Button key="memories" label={label('memories', '🎞️ Memories')} onPress={send('memories', 'open my memories')} /> : null}
+            {has.planner ? <Button key="planner" label={label('planner', '📅 Planner')} onPress={send('planner', 'open my planner')} /> : null}
+          </Box>
+        ) : null}
       </Box>
     )
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
+    await stripMode($).catch(() => null) // a client's to-do file lives where their strip.json says
     const { Box, Text, Button, Svg } = $.ui.resolve(e)
     const { one, list, long = [], done } = await read($, board)
     const pup = await read($, dog)
